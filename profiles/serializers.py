@@ -2,17 +2,18 @@ from rest_framework import serializers
 from .models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping
 
 class StudentProfileSerializer(serializers.ModelSerializer):
-<<<<<<< HEAD
     # 1. Define these fields explicitly WITHOUT a 'source' to bypass the UUID validation bug
-        first_name = serializers.CharField(required=False)
-        last_name = serializers.CharField(required=False)
-        email = serializers.EmailField(required=False)
-        
-        # New fields brought in from the team's updates
-        address = serializers.CharField(read_only=True)
-        phone_number = serializers.CharField(read_only=True)
-        blood_group = serializers.CharField(read_only=True)
+    first_name = serializers.CharField(required=False)
+    last_name = serializers.CharField(required=False)
+    email = serializers.EmailField(required=False)
+    
+    # New fields brought in from the team's updates
+    address = serializers.CharField(read_only=True)
+    phone_number = serializers.CharField(read_only=True)
+    blood_group = serializers.CharField(read_only=True)
+
     class Meta:
+        # ... rest of the meta code ...
         model = StudentProfile
         fields = '__all__'
         read_only_fields = ('school', 'id')

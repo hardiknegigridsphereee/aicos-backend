@@ -1,9 +1,22 @@
-venv
-.venv
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
 
+# --- Environment Variables (NEVER commit these!) ---
 .env
-env
 
-dockerfile
-.dockerignore
-docker-compose.yml
+# --- Python Cache ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Database ---
+db.sqlite3
+
+# --- IDE & System ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

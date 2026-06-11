@@ -1,6 +1,6 @@
 from django.utils import timezone
 from django.db import transaction, IntegrityError
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters # FIXED: Added 'filters' import
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -142,6 +142,15 @@ class TeacherAssignmentViewSet(TenantAwareModelViewSet):
         'teacher__user', 'academic_year', 'class_level', 'section', 'subject'
     ).all()
     serializer_class = TeacherAssignmentSerializer
+
+    # --- ADDED FOR SEARCH FUNCTIONALITY ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = [
+        'teacher__user__first_name', 
+        'teacher__user__last_name', 
+        'subject__name', 
+        'class_level__name'
+    ]
 
     def get_queryset(self):
         qs = super().get_queryset()
