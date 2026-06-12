@@ -1,6 +1,6 @@
 from django.utils import timezone
 from django.db import transaction, IntegrityError
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, filters # FIXED: Added 'filters' import
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -26,6 +26,9 @@ from .serializers import (
 class AcademicYearViewSet(TenantAwareModelViewSet):
     queryset = AcademicYear.objects.all()
     serializer_class = AcademicYearSerializer
+    # --- ADDED FOR SEARCH ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['name']
 
 @extend_schema_view(
     list=extend_schema(summary="List all class levels"),
@@ -38,6 +41,9 @@ class AcademicYearViewSet(TenantAwareModelViewSet):
 class ClassLevelViewSet(TenantAwareModelViewSet):
     queryset = ClassLevel.objects.all()
     serializer_class = ClassLevelSerializer
+    # --- ADDED FOR SEARCH ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['name']
 
 @extend_schema_view(
     list=extend_schema(summary="List all sections"),
@@ -50,6 +56,9 @@ class ClassLevelViewSet(TenantAwareModelViewSet):
 class SectionViewSet(TenantAwareModelViewSet):
     queryset = Section.objects.select_related('class_level').all()
     serializer_class = SectionSerializer
+    # --- ADDED FOR SEARCH ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['name', 'class_level__name']
 
 @extend_schema_view(
     list=extend_schema(summary="List all subjects"),
@@ -62,6 +71,9 @@ class SectionViewSet(TenantAwareModelViewSet):
 class SubjectViewSet(TenantAwareModelViewSet):
     queryset = Subject.objects.prefetch_related('class_levels').all()
     serializer_class = SubjectSerializer
+    # --- ADDED FOR SEARCH ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['name', 'code']
 
 
 # --- EXISTING ENROLLMENT & ASSIGNMENT VIEWSETS ---
@@ -71,6 +83,15 @@ class StudentEnrollmentViewSet(TenantAwareModelViewSet):
         'student__user', 'academic_year', 'class_level', 'section'
     ).all()
     serializer_class = StudentEnrollmentSerializer
+
+    # --- ADDED FOR SEARCH ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = [
+        'student__user__first_name', 
+        'student__user__last_name', 
+        'class_level__name', 
+        'section__name'
+    ]
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -144,6 +165,15 @@ class TeacherAssignmentViewSet(TenantAwareModelViewSet):
     ).all()
     serializer_class = TeacherAssignmentSerializer
 
+    # --- ADDED FOR SEARCH ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = [
+        'teacher__user__first_name', 
+        'teacher__user__last_name', 
+        'subject__name', 
+        'class_level__name'
+    ]
+
     def get_queryset(self):
         qs = super().get_queryset()
         status_param = self.request.query_params.get('status', None)
@@ -175,6 +205,14 @@ class SavedAIContentViewSet(TenantAwareModelViewSet):
     queryset = SavedAIContent.objects.all()
     serializer_class = SavedAIContentSerializer
 
+    # --- ADDED FOR SEARCH ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = [
+        'title', 
+        'content_type',
+        'generated_content' # Optional: Remove this if the content body is massive and slows down queries
+    ]
+
     def get_queryset(self):
         qs = super().get_queryset()
         
@@ -193,3 +231,4 @@ class SavedAIContentViewSet(TenantAwareModelViewSet):
         else:
             from rest_framework import serializers
             raise serializers.ValidationError({"detail": "User is not a teacher."})
+        
