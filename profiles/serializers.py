@@ -2,23 +2,23 @@ from rest_framework import serializers
 from .models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping
 
 class StudentProfileSerializer(serializers.ModelSerializer):
-    # Define fields explicitly
-    first_name = serializers.CharField(required=False)
-    last_name = serializers.CharField(required=False)
-    email = serializers.EmailField(required=False)
-    
-    # Read-only fields
-    address = serializers.CharField(read_only=True)
-    phone_number = serializers.CharField(read_only=True)
-    blood_group = serializers.CharField(read_only=True)
-    
-    class Meta:
-        model = StudentProfile
-        fields = '__all__'
-        read_only_fields = ('school', 'id')
 
-    def to_representation(self, instance):
-        """Populate user fields when returning data"""
+    # 1. Define these fields explicitly WITHOUT a 'source' to bypass the UUID validation bug
+        first_name = serializers.CharField(required=False)
+        last_name = serializers.CharField(required=False)
+        email = serializers.EmailField(required=False)
+        
+        # New fields brought in from the team's updates
+        address = serializers.CharField(read_only=True)
+        phone_number = serializers.CharField(read_only=True)
+        blood_group = serializers.CharField(read_only=True)
+        class Meta:
+            model = StudentProfile
+            fields = '__all__'
+            read_only_fields = ('school', 'id')
+
+    # 2. This populates the fields dynamically when React asks for the student data (GET)
+def to_representation(self, instance):
         representation = super().to_representation(instance)
         if instance.user:
             representation['first_name'] = instance.user.first_name
@@ -26,8 +26,9 @@ class StudentProfileSerializer(serializers.ModelSerializer):
             representation['email'] = instance.user.email
         return representation
 
-    def update(self, instance, validated_data):
-        """Handle user fields when updating"""
+    # 3. This intercepts the flat fields when React updates the student data (PATCH)
+def update(self, instance, validated_data):
+        # Pop the fields out of the payload before Django tries to save them to the Profile model
         first_name = validated_data.pop('first_name', None)
         last_name = validated_data.pop('last_name', None)
         email = validated_data.pop('email', None)
