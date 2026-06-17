@@ -36,6 +36,7 @@ THIRD_PARTY_APPS = [
     'rest_framework_simplejwt',  # For JWT Authentication later
     'drf_spectacular',           # OpenAPI / Swagger UI generator
     'corsheaders',               # To handle requests from your frontend
+    'django_filters',            # ← ADDED: for is_archived and class_level filtering
 ]
 
 # We will create these apps as we progress through the roadmap
@@ -132,6 +133,10 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_FILTER_BACKENDS': [                                          # ← ADDED
+        'django_filters.rest_framework.DjangoFilterBackend',              # ← ADDED
+        'rest_framework.filters.SearchFilter',                            # ← ADDED
+    ],  
 }
 
 # ------------------------------------------------------------------------
