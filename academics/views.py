@@ -3,9 +3,11 @@ from django.db import transaction, IntegrityError
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from tenants.views import TenantAwareModelViewSet
+from profiles.models import TeacherProfile
 from .models import StudentEnrollment, TeacherAssignment, AcademicYear, ClassLevel, Section, Subject
 from .serializers import (
     StudentEnrollmentSerializer, TeacherAssignmentSerializer, BulkPromotionSerializer,
@@ -63,7 +65,7 @@ class SubjectViewSet(TenantAwareModelViewSet):
     serializer_class = SubjectSerializer
 
 
-# --- EXISTING ENROLLMENT & ASSIGNMENT VIEWSETS ---
+# --- ENROLLMENT & ASSIGNMENT VIEWSETS ---
 
 class StudentEnrollmentViewSet(TenantAwareModelViewSet):
     queryset = StudentEnrollment.objects.select_related(
@@ -79,12 +81,10 @@ class StudentEnrollmentViewSet(TenantAwareModelViewSet):
         if student_id:
             qs = qs.filter(student_id=student_id)
 
-        # Add filtering by section_id
         section_id = self.request.query_params.get('section', None)
         if section_id:
             qs = qs.filter(section_id=section_id)
-        
-        # Add filtering by academic_year_id
+
         academic_year_id = self.request.query_params.get('academic_year', None)
         if academic_year_id:
             qs = qs.filter(academic_year_id=academic_year_id)
@@ -125,12 +125,12 @@ class StudentEnrollmentViewSet(TenantAwareModelViewSet):
         try:
             with transaction.atomic():
                 StudentEnrollment.objects.bulk_create(enrollments_to_create)
-                
+
             return Response(
                 {"detail": f"Successfully promoted {len(student_ids)} students."},
                 status=status.HTTP_201_CREATED
             )
-            
+
         except IntegrityError:
             return Response(
                 {"detail": "Promotion failed. One or more students are already enrolled in the target academic year."},
@@ -161,3 +161,57 @@ class TeacherAssignmentViewSet(TenantAwareModelViewSet):
             qs = qs.filter(academic_year__end_date__lt=today)
 
         return qs
+
+    @extend_schema(
+        summary="List students in a section I'm assigned to teach",
+        responses={200: StudentEnrollmentSerializer(many=True)},
+    )
+    @action(detail=False, methods=['get'], url_path='my-students')
+    def my_students(self, request):
+        """
+        GET /api/v1/academics/teacher-assignments/my-students/?section=<id>
+
+        Teacher-only. Returns the roster (StudentEnrollment rows) for a
+        section, but ONLY if the logged-in teacher actually has a
+        TeacherAssignment row for that section. If `section` is omitted,
+        returns the roster for every section this teacher is assigned to.
+
+        Staff/superusers may also call this; they bypass the assignment
+        check entirely and can request any section in their school.
+        """
+        user = request.user
+        school = user.school
+
+        is_staff_or_super = user.is_superuser or user.is_staff
+        teacher_profile = TeacherProfile.objects.filter(user=user).first()
+
+        if not is_staff_or_super and not teacher_profile:
+            raise PermissionDenied("Only teachers or staff can view a class roster.")
+
+        requested_section_id = request.query_params.get('section')
+
+        if is_staff_or_super:
+            allowed_section_ids = [requested_section_id] if requested_section_id else None
+        else:
+            assigned_section_ids = list(
+                TeacherAssignment.objects.filter(
+                    school=school, teacher=teacher_profile
+                ).values_list('section_id', flat=True).distinct()
+            )
+
+            if requested_section_id:
+                if str(requested_section_id) not in [str(s) for s in assigned_section_ids]:
+                    raise PermissionDenied("You are not assigned to teach this section.")
+                allowed_section_ids = [requested_section_id]
+            else:
+                allowed_section_ids = assigned_section_ids
+
+        enrollments = StudentEnrollment.objects.filter(school=school).select_related(
+            'student__user', 'academic_year', 'class_level', 'section'
+        )
+
+        if allowed_section_ids is not None:
+            enrollments = enrollments.filter(section_id__in=allowed_section_ids)
+
+        serializer = StudentEnrollmentSerializer(enrollments, many=True)
+        return Response({"count": enrollments.count(), "results": serializer.data}, status=status.HTTP_200_OK)
