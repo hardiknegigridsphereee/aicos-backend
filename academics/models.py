@@ -123,3 +123,22 @@ class TeacherAssignment(TenantAwareModel):
 
     def __str__(self):
         return f"{self.teacher.user.last_name} -> {self.subject.name} ({self.section.name})"
+
+class SavedAIContent(TenantAwareModel):
+    """
+    Stores AI-generated content (Quiz, Lesson Plan, etc.) saved by teachers.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    teacher = models.ForeignKey('profiles.TeacherProfile', on_delete=models.CASCADE, related_name='saved_ai_contents')
+    class_name = models.CharField(max_length=50, blank=True, null=True)
+    subject = models.CharField(max_length=100, blank=True, null=True)
+    content_type = models.CharField(max_length=50) # e.g., 'Quiz', 'Lesson Plan'
+    data = models.JSONField() # Stores the actual generated content
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"{self.content_type} by {self.teacher.user.last_name} ({self.updated_at.date()})"

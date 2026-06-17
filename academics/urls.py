@@ -6,7 +6,8 @@ from .views import (
     AcademicYearViewSet,
     ClassLevelViewSet,
     SectionViewSet,
-    SubjectViewSet
+    SubjectViewSet,
+    SavedAIContentViewSet
 )
 
 router = DefaultRouter()
@@ -20,6 +21,7 @@ router.register(r'subjects', SubjectViewSet, basename='subject')
 # Register existing routing
 router.register(r'enrollments', StudentEnrollmentViewSet, basename='enrollment')
 router.register(r'teacher-assignments', TeacherAssignmentViewSet, basename='teacher-assignment')
+router.register(r'saved-ai-content', SavedAIContentViewSet, basename='saved-ai-content')
 
 urlpatterns = [
     path('', include(router.urls)),

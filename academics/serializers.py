@@ -1,8 +1,12 @@
 from rest_framework import serializers
-from .models import StudentEnrollment, TeacherAssignment, AcademicYear, ClassLevel, Section, Subject
+from .models import StudentEnrollment, TeacherAssignment, AcademicYear, ClassLevel, Section, Subject, SavedAIContent
 from profiles.models import StudentProfile
 
-# --- NEW ACADEMIC BASE SERIALIZERS ---
+class SavedAIContentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SavedAIContent
+        fields = '__all__'
+        read_only_fields = ('school', 'id', 'teacher')
 
 class AcademicYearSerializer(serializers.ModelSerializer):
     class Meta:

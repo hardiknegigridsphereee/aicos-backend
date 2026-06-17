@@ -1,4 +1,4 @@
-from rest_framework import viewsets, views, response
+from rest_framework import viewsets, views, response, filters
 from rest_framework.permissions import IsAuthenticated
 from tenants.views import TenantAwareModelViewSet
 from .models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping
@@ -12,18 +12,40 @@ from .serializers import (
 class StudentProfileViewSet(TenantAwareModelViewSet):
     queryset = StudentProfile.objects.all()
     serializer_class = StudentProfileSerializer
+    
+    filter_backends = [filters.SearchFilter]
+    # FIXED: Added 'user__' to traverse the OneToOne relationship
+    search_fields = ['user__first_name', 'user__last_name', 'user__email', 'enrollment_number']
 
 class TeacherProfileViewSet(TenantAwareModelViewSet):
     queryset = TeacherProfile.objects.all()
     serializer_class = TeacherProfileSerializer
+    
+    filter_backends = [filters.SearchFilter]
+    # FIXED: Added 'user__'
+    search_fields = ['user__first_name', 'user__last_name', 'user__email']
 
 class ParentProfileViewSet(TenantAwareModelViewSet):
     queryset = ParentProfile.objects.all()
     serializer_class = ParentProfileSerializer
+    
+    filter_backends = [filters.SearchFilter]
+    # FIXED: Added 'user__' (phone_number belongs to the profile, so it stays as is)
+    search_fields = ['user__first_name', 'user__last_name', 'user__email', 'phone_number']
 
 class ParentStudentMappingViewSet(TenantAwareModelViewSet):
     queryset = ParentStudentMapping.objects.all()
     serializer_class = ParentStudentMappingSerializer
+
+    # --- ADDED FOR SEARCH FUNCTIONALITY ---
+    filter_backends = [filters.SearchFilter]
+    search_fields = [
+        'parent__user__first_name', 
+        'parent__user__last_name', 
+        'student__user__first_name', 
+        'student__user__last_name',
+        'relationship' # FIXED: Changed from 'relationship_type' to 'relationship'
+    ]
 
 # --- TASK 2.4: Context Switching API ---
 
