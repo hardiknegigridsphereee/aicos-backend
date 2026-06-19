@@ -63,6 +63,7 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
             representation['first_name'] = instance.user.first_name
             representation['last_name'] = instance.user.last_name
             representation['email'] = instance.user.email
+            representation['is_archived'] = not instance.user.is_active 
         return representation
 
     # Intercept and save the user data on PATCH
@@ -93,6 +94,12 @@ class ParentProfileSerializer(serializers.ModelSerializer):
         model = ParentProfile
         fields = '__all__'
         read_only_fields = ('school', 'id')
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+        if instance.user:
+            representation['is_archived'] = not instance.user.is_active
+        return representation
 
 
 class ParentStudentMappingSerializer(serializers.ModelSerializer):
