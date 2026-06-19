@@ -12,7 +12,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'email', 'password', 'first_name', 'last_name', 'school', 'school_name', 'school_subdomain', 'is_staff']
+        fields = ['id', 'email', 'password', 'first_name', 'last_name', 'school', 'school_name', 'school_subdomain', 'is_staff', 'is_active']
         read_only_fields = ['id', 'school', 'is_staff']
 
     def create(self, validated_data):

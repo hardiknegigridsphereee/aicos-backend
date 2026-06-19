@@ -1,32 +1,45 @@
-# Core Django & Framework
-django>=6.0,<7.0
-djangorestframework>=3.15.0,<4.0
-
-# Database
-psycopg2-binary>=2.9.0
-
-# Configuration & Environment
-django-environ>=0.11.0
-
-# API Documentation
-drf-spectacular>=0.27.0
-
-# Authentication
-djangorestframework-simplejwt>=5.3.0
-
-# CORS & Security
-django-cors-headers>=4.3.0
-
-# Image Processing
-Pillow>=10.0.0
-
-# Production Server
-gunicorn>=21.0.0
-
-# AI / LLM Integration
-openai>=1.0.0          # For DeepSeek API (OpenAI-compatible)
-requests>=2.31.0       # HTTP client for API calls
-
-# Optional but recommended for better performance
-django-debug-toolbar>=4.0.0    # Debugging (development only)
-python-dotenv>=1.0.0           # Environment variables (backup)
+annotated-types==0.7.0
+anyio==4.13.0
+asgiref==3.11.1
+attrs==26.1.0
+certifi==2026.5.20
+charset-normalizer==3.4.7
+colorama==0.4.6
+distro==1.9.0
+Django==6.0.6
+django-cors-headers==4.9.0
+django-debug-toolbar==6.3.0
+django-environ==0.13.0
+django-filter==25.2
+djangorestframework==3.17.1
+djangorestframework_simplejwt==5.5.1
+drf-spectacular==0.29.0
+gunicorn==26.0.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.18
+inflection==0.5.1
+jiter==0.15.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+openai==2.41.1
+packaging==26.2
+pillow==12.2.0
+psycopg2-binary==2.9.12
+pydantic==2.13.4
+pydantic_core==2.46.4
+PyJWT==2.13.0
+python-dotenv==1.2.2
+PyYAML==6.0.3
+referencing==0.37.0
+requests==2.34.2
+rpds-py==2026.5.1
+sniffio==1.3.1
+sqlparse==0.5.5
+tqdm==4.68.2
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata==2026.2
+uritemplate==4.2.0
+urllib3==2.7.0
