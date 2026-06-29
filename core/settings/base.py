@@ -48,8 +48,10 @@ LOCAL_APPS = [
     'academics',    # Classes, Sections, Enrollments
     'operations',
     'school_admin',
-      'tutor'  # Dashboard, Notifications, Activity Logs
+    'tutor',  # Dashboard, Notifications, Activity Logs
     # 'finance',      # Invoices, Payments
+    'leave_management',
+    'timetable'
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

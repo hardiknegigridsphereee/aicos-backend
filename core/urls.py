@@ -9,8 +9,8 @@ from .views.file_upload_views import (
     ConfirmUploadView,
     GenerateDownloadURLView,
     GenerateViewURLView,
-    GenerateProfileImageUploadURLView,  # ✅ Updated from GenerateParentImageUploadURLView
-    GetProfilePictureView,               # ✅ New generic view
+    GenerateProfileImageUploadURLView,
+    GetProfilePictureView,
 )
 
 urlpatterns = [
@@ -31,16 +31,20 @@ urlpatterns = [
     path('api/v1/uploads/download-url/', GenerateDownloadURLView.as_view(), name='generate-download-url'),
     path('api/v1/uploads/view-url/', GenerateViewURLView.as_view(), name='generate-view-url'),
     
-    # ✅ Updated: Generic profile image upload (Parent, Student, Teacher)
+    # Profile image upload & fetch
     path('api/v1/uploads/profile-image/', GenerateProfileImageUploadURLView.as_view(), name='profile-image-upload'),
-    
-    # ✅ New: Generic profile picture fetch
     path('api/v1/profiles/me/picture/', GetProfilePictureView.as_view(), name='profile-picture'),
     
     # Swagger / OpenAPI Endpoints
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/schema/swagger-ui/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
     path('api/schema/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    
+    # Leave Management
+    path('api/v1/leave-management/', include('leave_management.urls')),
+    
+    # Timetable Management (NEW)
+    path('api/v1/timetable/', include('timetable.urls')),
 ]
 
 # Serve media files in development (for local storage fallback)
