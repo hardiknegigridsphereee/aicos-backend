@@ -6,7 +6,6 @@ from .base import *
 DEBUG = env.bool('DEBUG', default=False)
 
 # Read allowed hosts from environment. 
-# Ensure your .env has ALLOWED_HOSTS=187.127.139.208
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
 
 # ------------------------------------------------------------------------
@@ -19,25 +18,48 @@ DATABASES = {
 # ------------------------------------------------------------------------
 # SECURITY CONFIGURATION
 # ------------------------------------------------------------------------
-
-# IMPORTANT: We are disabling these temporarily. 
-# Once you have a Domain Name (e.g., erp.example.com) and an SSL certificate 
-# via Certbot/Nginx, you should set these back to True.
-
-SESSION_COOKIE_SECURE = False
-CSRF_COOKIE_SECURE = False
-SECURE_SSL_REDIRECT = False  # This was likely causing your Timeout!
-SECURE_HSTS_SECONDS = 0 
-SECURE_HSTS_INCLUDE_SUBDOMAINS = False
-SECURE_HSTS_PRELOAD = False
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+SECURE_SSL_REDIRECT = True
+SECURE_HSTS_SECONDS = 31536000  # 1 year
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
 
 # ------------------------------------------------------------------------
-# CORS CONFIGURATION
+# CORS CONFIGURATION - PRODUCTION
 # ------------------------------------------------------------------------
+# Read from environment, with a fallback for local testing
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
-CORS_ALLOW_CREDENTIALS = True 
+CORS_ALLOW_CREDENTIALS = True
+
+# Only allow specific methods and headers
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
+# ------------------------------------------------------------------------
+# CSRF TRUSTED ORIGINS
+# ------------------------------------------------------------------------
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
+
 # ------------------------------------------------------------------------
 # STATIC & MEDIA FILES
 # ------------------------------------------------------------------------
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-# Ensure Whitenoise or Nginx is configured to serve these in production

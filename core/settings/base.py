@@ -36,7 +36,8 @@ THIRD_PARTY_APPS = [
     'rest_framework_simplejwt',  # For JWT Authentication later
     'drf_spectacular',           # OpenAPI / Swagger UI generator
     'corsheaders',               # To handle requests from your frontend
-    'django_filters',            # ← ADDED: for is_archived and class_level filtering
+    'django_filters', 
+    'storages'           # ← ADDED: for is_archived and class_level filtering
 ]
 
 # We will create these apps as we progress through the roadmap
@@ -161,3 +162,36 @@ SPECTACULAR_SETTINGS = {
     'COMPONENT_SPLIT_REQUEST': True, # Good for handling complex nested serializers
     'SECURITY': [{'jwtAuth': []}],
 }
+
+# ============================================================================
+# R2 / S3 COMPATIBLE STORAGE CONFIGURATION
+# ============================================================================
+
+# R2 Configuration
+R2_ACCOUNT_ID = env('R2_ACCOUNT_ID', default='')
+R2_ACCESS_KEY_ID = env('R2_ACCESS_KEY_ID', default='')
+R2_SECRET_ACCESS_KEY = env('R2_SECRET_ACCESS_KEY', default='')
+R2_BUCKET_NAME = env('R2_BUCKET_NAME', default='')
+
+# S3/R2 Settings
+AWS_S3_ENDPOINT_URL = f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com' if R2_ACCOUNT_ID else None
+AWS_ACCESS_KEY_ID = R2_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY = R2_SECRET_ACCESS_KEY
+AWS_STORAGE_BUCKET_NAME = R2_BUCKET_NAME
+AWS_S3_REGION_NAME = 'auto'
+AWS_S3_SIGNATURE_VERSION = 's3v4'
+AWS_QUERYSTRING_AUTH = True  # ✅ Important: Keep this True for signed URLs
+AWS_S3_FILE_OVERWRITE = False
+
+# ✅ IMPORTANT: Do NOT set DEFAULT_ACL for signed URLs
+# AWS_DEFAULT_ACL = None  # Let signed URLs handle permissions
+
+# Storage backend
+if R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET_NAME:
+    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    MEDIA_URL = f'https://{R2_BUCKET_NAME}.{R2_ACCOUNT_ID}.r2.cloudflarestorage.com/'
+    print(f"✅ Using R2 storage: {R2_BUCKET_NAME}")
+else:
+    DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
+    MEDIA_URL = '/media/'
+    print("⚠️ Using local storage (R2 not configured)")
