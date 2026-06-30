@@ -5,7 +5,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from profiles.models import StudentProfile, TeacherProfile
+from profiles.models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping
 from tenants.views import TenantAwareModelViewSet
 
 from .models import LeaveRequest
@@ -32,6 +32,7 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
       School Admin -> GET  /leave-requests/pending-review/  (teacher leaves to action)
                    -> POST /leave-requests/{id}/approve/    (action a teacher's leave)
                    -> POST /leave-requests/{id}/reject/
+      Parents   -> GET  /leave-requests/?student_id=<id>  (their mapped child's leave history, read-only)
       Any applicant -> POST /leave-requests/{id}/cancel/  (withdraw own pending request)
     """
 
@@ -71,6 +72,7 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
         else:
             student_profile = StudentProfile.objects.filter(user=user).first()
             teacher_profile = TeacherProfile.objects.filter(user=user).first()
+            parent_profile = ParentProfile.objects.filter(user=user).first()
 
             if student_profile and not teacher_profile:
                 # Students can only ever see their own requests.
@@ -83,8 +85,27 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
                 qs = qs.filter(
                     models_q_teacher_or_homeroom_student(teacher_profile, homeroom_ids)
                 )
+            elif parent_profile:
+                # Parents can only see leave requests of their own mapped
+                # children — never teacher leaves, never other students.
+                mapped_child_ids = ParentStudentMapping.objects.filter(
+                    parent=parent_profile
+                ).values_list('student_id', flat=True)
+
+                qs = qs.filter(
+                    applicant_role=LeaveRequest.ApplicantRole.STUDENT,
+                    student_id__in=mapped_child_ids,
+                )
+
+                student_id_param = self.request.query_params.get('student_id')
+                if student_id_param:
+                    # Extra safety: even if someone passes a student_id that
+                    # isn't actually their child, the mapped_child_ids filter
+                    # above already excludes it — this just narrows the
+                    # result to the one selected child.
+                    qs = qs.filter(student_id=student_id_param)
             else:
-                # School-admin style account (no student/teacher profile).
+                # School-admin style account (no student/teacher/parent profile).
                 qs = qs.filter(applicant_role=LeaveRequest.ApplicantRole.TEACHER)
 
         for param, field in [
