@@ -316,43 +316,40 @@ class TimetableEntryViewSet(TenantAwareModelViewSet):
     # ------------------------------------------------------------------
     # My Timetable (Student/Teacher)
     # ------------------------------------------------------------------
-
     @action(detail=False, methods=['get'], url_path='my-timetable')
     def my_timetable(self, request):
         """
         GET /api/v1/timetable/entries/my-timetable/
         Returns the timetable for the current student or teacher.
+        Uses the student's enrolled academic year instead of the globally active one.
         """
         user = request.user
-        academic_year_id = request.query_params.get('academic_year')
-        
-        try:
-            if academic_year_id:
-                academic_year = AcademicYear.objects.get(id=academic_year_id, school=user.school)
-            else:
-                academic_year = AcademicYear.objects.filter(
-                    school=user.school,
-                    is_active=True
-                ).first()
-        except AcademicYear.DoesNotExist:
-            return Response(
-                {'detail': 'Academic year not found.'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        if not academic_year:
-            return Response(
-                {'detail': 'No academic year specified.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
         
         # Student view
         if hasattr(user, 'studentprofile'):
             student = user.studentprofile
+            
+            # ✅ FIX: Get the student's current enrollment
+            from academics.models import StudentEnrollment
+            enrollment = StudentEnrollment.objects.filter(
+                student=student,
+                school=user.school
+            ).order_by('-academic_year__start_date').first()
+            
+            if not enrollment:
+                return Response(
+                    {'detail': 'Student is not enrolled in any academic year.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Use the enrollment's academic year
+            academic_year = enrollment.academic_year
+            
+            # Get timetable for this student's section and academic year
             entries = get_student_timetable(student, academic_year)
             timetable = organize_timetable_by_day(entries)
             
-            section, _ = get_student_current_section(student)
+            section = enrollment.section
             
             # Format the timetable for display
             formatted_timetable = {}
@@ -386,6 +383,31 @@ class TimetableEntryViewSet(TenantAwareModelViewSet):
         # Teacher view
         if hasattr(user, 'teacherprofile'):
             teacher = user.teacherprofile
+            
+            # Allow optional academic_year query param for teachers
+            academic_year_id = request.query_params.get('academic_year')
+            
+            try:
+                if academic_year_id:
+                    academic_year = AcademicYear.objects.get(id=academic_year_id, school=user.school)
+                else:
+                    # For teachers, use active academic year if not specified
+                    academic_year = AcademicYear.objects.filter(
+                        school=user.school,
+                        is_active=True
+                    ).first()
+            except AcademicYear.DoesNotExist:
+                return Response(
+                    {'detail': 'Academic year not found.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            if not academic_year:
+                return Response(
+                    {'detail': 'No academic year specified.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             entries = get_teacher_timetable(teacher, academic_year)
             timetable = organize_timetable_by_day(entries)
             
@@ -422,7 +444,6 @@ class TimetableEntryViewSet(TenantAwareModelViewSet):
             {'detail': 'Only students and teachers can view their timetable.'},
             status=status.HTTP_403_FORBIDDEN
         )
-
     # ------------------------------------------------------------------
     # Section Timetable
     # ------------------------------------------------------------------

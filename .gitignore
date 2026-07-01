@@ -17,6 +17,9 @@ dist/
 build/
 *.egg
 
+docker-compose*.yml
+docker-compose.override.yml
+
 # Django
 *.log
 *.pot
