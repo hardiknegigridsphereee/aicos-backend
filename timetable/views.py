@@ -8,8 +8,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
 from tenants.views import TenantAwareModelViewSet
-from academics.models import AcademicYear, ClassLevel, Section, Subject
-from profiles.models import StudentProfile, TeacherProfile
+from academics.models import AcademicYear, ClassLevel, Section, Subject, StudentEnrollment
+from profiles.models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping
 from school_admin.models import TimetableSettings
 
 from .models import TimeSlot, TimetableEntry, TimetableTemplate
@@ -85,6 +85,7 @@ class TimetableEntryViewSet(TenantAwareModelViewSet):
     
     - Students: Can view their own class timetable
     - Teachers: Can view timetables for classes they teach
+    - Parents: Can view timetables for their children (via my-timetable with ?student_id)
     - Admins: Full CRUD access
     """
     queryset = TimetableEntry.objects.select_related(
@@ -314,23 +315,164 @@ class TimetableEntryViewSet(TenantAwareModelViewSet):
         })
 
     # ------------------------------------------------------------------
-    # My Timetable (Student/Teacher)
+    # My Timetable (Student/Teacher/Parent)
     # ------------------------------------------------------------------
+
     @action(detail=False, methods=['get'], url_path='my-timetable')
     def my_timetable(self, request):
         """
         GET /api/v1/timetable/entries/my-timetable/
-        Returns the timetable for the current student or teacher.
-        Uses the student's enrolled academic year instead of the globally active one.
+        Returns the timetable for:
+        - Students: Their own timetable (auto-detected)
+        - Teachers: Their own timetable (auto-detected, can filter by academic_year)
+        - Parents: Their child's timetable (requires ?student_id=UUID)
+        
+        Query params:
+        - academic_year: UUID (optional) - For teachers/parents to specify year
+        - student_id: UUID (required for parents) - The child's student ID
+        
+        Returns: Formatted timetable by day and period
         """
         user = request.user
+        student_id = request.query_params.get('student_id')
+        academic_year_id = request.query_params.get('academic_year')
         
-        # Student view
+        # ── PARENT VIEW ──────────────────────────────────────────────────────
+        # Check if user is a parent and wants to view a child's timetable
+        if hasattr(user, 'parentprofile') and student_id:
+            parent = user.parentprofile
+            
+            # Verify parent-child relationship
+            try:
+                mapping = ParentStudentMapping.objects.get(
+                    parent=parent,
+                    student_id=student_id,
+                    school=user.school,
+                    can_view_academics=True
+                )
+            except ParentStudentMapping.DoesNotExist:
+                return Response(
+                    {'detail': 'You are not authorized to view this student\'s timetable.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            student = mapping.student
+            
+            # Get the academic year from enrollment or query param
+            enrollment = StudentEnrollment.objects.filter(
+                student=student,
+                school=user.school
+            ).order_by('-academic_year__start_date').first()
+            
+            if not enrollment:
+                return Response(
+                    {'detail': 'Student is not enrolled in any academic year.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Use provided academic_year or fallback to enrollment's year
+            if academic_year_id:
+                try:
+                    academic_year = AcademicYear.objects.get(
+                        id=academic_year_id,
+                        school=user.school
+                    )
+                except AcademicYear.DoesNotExist:
+                    return Response(
+                        {'detail': 'Academic year not found.'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            else:
+                academic_year = enrollment.academic_year
+            
+            # Get timetable for this student's section and academic year
+            entries = get_student_timetable(student, academic_year)
+            timetable = organize_timetable_by_day(entries)
+            
+            section = enrollment.section
+            
+            # Format the timetable for display
+            formatted_timetable = {}
+            for day, periods in timetable.items():
+                formatted_timetable[day] = {}
+                for period, entry in periods.items():
+                    if entry:
+                        formatted_timetable[day][period] = {
+                            'id': str(entry.id),
+                            'subject': entry.subject.name,
+                            'teacher': f"{entry.teacher.user.first_name} {entry.teacher.user.last_name}",
+                            'room': entry.room_number,
+                            'notes': entry.notes,
+                            'subject_id': str(entry.subject.id),
+                            'teacher_id': str(entry.teacher.id),
+                            'time_slot': {
+                                'start_time': entry.time_slot.start_time.strftime('%H:%M'),
+                                'end_time': entry.time_slot.end_time.strftime('%H:%M'),
+                            }
+                        }
+            
+            return Response({
+                'user_type': 'parent',
+                'parent_name': f"{parent.user.first_name} {parent.user.last_name}",
+                'student_name': f"{student.user.first_name} {student.user.last_name}",
+                'student_id': str(student.id),
+                'class_level': section.class_level.name if section else None,
+                'section': section.name if section else None,
+                'academic_year': academic_year.name,
+                'timetable': formatted_timetable
+            })
+        
+        # ── PARENT WITH NO STUDENT_ID ──────────────────────────────────────
+        # Parent didn't specify student_id - return list of their children
+        if hasattr(user, 'parentprofile'):
+            parent = user.parentprofile
+            children_mappings = ParentStudentMapping.objects.filter(
+                parent=parent,
+                school=user.school,
+                can_view_academics=True
+            ).select_related('student__user')
+            
+            if not children_mappings.exists():
+                return Response({
+                    'user_type': 'parent',
+                    'parent_name': f"{parent.user.first_name} {parent.user.last_name}",
+                    'message': 'No children found with academic access.',
+                    'children': []
+                })
+            
+            children_data = []
+            for mapping in children_mappings:
+                student = mapping.student
+                enrollment = StudentEnrollment.objects.filter(
+                    student=student,
+                    school=user.school
+                ).order_by('-academic_year__start_date').first()
+                
+                children_data.append({
+                    'id': str(student.id),
+                    'name': f"{student.user.first_name} {student.user.last_name}",
+                    'enrollment_number': student.enrollment_number,
+                    'relationship': mapping.relationship,
+                    'current_class': {
+                        'class': enrollment.class_level.name if enrollment else None,
+                        'section': enrollment.section.name if enrollment else None,
+                        'academic_year': enrollment.academic_year.name if enrollment else None
+                    } if enrollment else None
+                })
+            
+            return Response({
+                'user_type': 'parent',
+                'parent_name': f"{parent.user.first_name} {parent.user.last_name}",
+                'message': 'Please specify ?student_id=UUID to view a child\'s timetable.',
+                'children': children_data
+            })
+        
+        # ── STUDENT VIEW ────────────────────────────────────────────────────
+        # Student viewing their own timetable
         if hasattr(user, 'studentprofile'):
             student = user.studentprofile
             
-            # ✅ FIX: Get the student's current enrollment
-            from academics.models import StudentEnrollment
+            # Get the student's current enrollment
             enrollment = StudentEnrollment.objects.filter(
                 student=student,
                 school=user.school
@@ -380,13 +522,11 @@ class TimetableEntryViewSet(TenantAwareModelViewSet):
                 'timetable': formatted_timetable
             })
         
-        # Teacher view
+        # ── TEACHER VIEW ────────────────────────────────────────────────────
         if hasattr(user, 'teacherprofile'):
             teacher = user.teacherprofile
             
             # Allow optional academic_year query param for teachers
-            academic_year_id = request.query_params.get('academic_year')
-            
             try:
                 if academic_year_id:
                     academic_year = AcademicYear.objects.get(id=academic_year_id, school=user.school)
@@ -441,9 +581,10 @@ class TimetableEntryViewSet(TenantAwareModelViewSet):
             })
         
         return Response(
-            {'detail': 'Only students and teachers can view their timetable.'},
+            {'detail': 'Only students, teachers, and parents can view timetables.'},
             status=status.HTTP_403_FORBIDDEN
         )
+
     # ------------------------------------------------------------------
     # Section Timetable
     # ------------------------------------------------------------------
