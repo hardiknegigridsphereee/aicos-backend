@@ -37,9 +37,12 @@ class SchoolAdminStudentListSerializer(serializers.ModelSerializer):
             return None
         return {
             'enrollment_id': str(enrollment.id),
-            'class_level': enrollment.class_level.name,
-            'section': enrollment.section.name,
-            'academic_year': enrollment.academic_year.name,
+            'class_level_id': str(enrollment.class_level_id) if enrollment.class_level_id else None,
+            'class_level': enrollment.class_level.name if enrollment.class_level_id else None,
+            'section_id': str(enrollment.section_id) if enrollment.section_id else None,
+            'section': enrollment.section.name if enrollment.section_id else None,
+            'academic_year_id': str(enrollment.academic_year_id) if enrollment.academic_year_id else None,
+            'academic_year': enrollment.academic_year.name if enrollment.academic_year_id else None,
             'roll_number': enrollment.roll_number,
         }
 
