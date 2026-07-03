@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.views import APIView
 from tenants.views import TenantAwareModelViewSet
 from accounts.permissions import IsStudent, IsTeacher, IsParent, IsParentOfStudent, IsStudentOrReadOnly, IsTeacherOrStaff
 from .models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping, StudentDevice, StudentLocationHistory
@@ -829,6 +830,183 @@ class ParentChildrenLocationsView(views.APIView):
                 }
             
             children_data.append(child_info)
+        
+        return Response({
+            'count': len(children_data),
+            'children': children_data
+        })
+# profiles/views.py - Add this new view at the end of the file
+
+class ParentChildProfilePictureView(APIView):
+    """
+    GET /api/v1/profiles/parents/me/children/{child_id}/picture/
+    Returns a signed URL for the child's profile picture
+    
+    Response:
+    {
+        "has_picture": true/false,
+        "url": "signed_url",
+        "expires_at": "2026-07-04T...",
+        "expires_in": 3600,
+        "child_id": "uuid",
+        "child_name": "John Doe",
+        "enrollment_number": "STU123"
+    }
+    """
+    permission_classes = [IsAuthenticated, IsParent]
+    
+    def get(self, request, child_id):
+        try:
+            parent = ParentProfile.objects.get(user=request.user, school=request.user.school)
+        except ParentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Parent profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify parent-child relationship
+        try:
+            mapping = ParentStudentMapping.objects.get(
+                parent=parent,
+                student_id=child_id,
+                school=request.user.school,
+                can_view_academics=True
+            )
+        except ParentStudentMapping.DoesNotExist:
+            return Response(
+                {'detail': 'You are not authorized to view this child\'s data.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        student = mapping.student
+        
+        # Check if profile picture exists
+        if not student.profile_picture:
+            return Response({
+                'has_picture': False,
+                'detail': 'No profile picture set for this student.',
+                'child_id': str(student.id),
+                'child_name': f"{student.user.first_name} {student.user.last_name}",
+                'enrollment_number': student.enrollment_number
+            }, status=status.HTTP_200_OK)
+        
+        # Get the file path
+        if hasattr(student.profile_picture, 'name'):
+            picture_path = student.profile_picture.name
+        else:
+            picture_path = str(student.profile_picture)
+        
+        # Generate signed URL (valid for 1 hour)
+        from core.utils.r2_storage import r2_storage
+        try:
+            view_data = r2_storage.generate_view_url(
+                file_path=picture_path,
+                expires_in=3600  # 1 hour
+            )
+            
+            return Response({
+                'has_picture': True,
+                'url': view_data['url'],
+                'expires_at': view_data['expires_at'],
+                'expires_in': view_data['expires_in'],
+                'file_path': picture_path,
+                'child_id': str(student.id),
+                'child_name': f"{student.user.first_name} {student.user.last_name}",
+                'enrollment_number': student.enrollment_number,
+                'relationship': mapping.relationship
+            })
+        except Exception as e:
+            return Response({
+                'has_picture': False,
+                'detail': f'Failed to generate view URL: {str(e)}',
+                'child_id': str(student.id),
+                'child_name': f"{student.user.first_name} {student.user.last_name}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ParentChildrenPicturesView(APIView):
+    """
+    GET /api/v1/profiles/parents/me/children/pictures/
+    Returns signed URLs for ALL children's profile pictures
+    
+    Response:
+    {
+        "children": [
+            {
+                "child_id": "uuid",
+                "child_name": "John Doe",
+                "enrollment_number": "STU123",
+                "relationship": "Mother",
+                "has_picture": true,
+                "url": "signed_url",
+                "expires_at": "2026-07-04T...",
+                "expires_in": 3600
+            },
+            {
+                "child_id": "uuid",
+                "child_name": "Jane Smith",
+                "enrollment_number": "STU456",
+                "relationship": "Father",
+                "has_picture": false
+            }
+        ]
+    }
+    """
+    permission_classes = [IsAuthenticated, IsParent]
+    
+    def get(self, request):
+        try:
+            parent = ParentProfile.objects.get(user=request.user, school=request.user.school)
+        except ParentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Parent profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get all children
+        mappings = ParentStudentMapping.objects.filter(
+            parent=parent,
+            school=request.user.school,
+            can_view_academics=True
+        ).select_related('student__user')
+        
+        children_data = []
+        from core.utils.r2_storage import r2_storage
+        
+        for mapping in mappings:
+            student = mapping.student
+            child_data = {
+                'child_id': str(student.id),
+                'child_name': f"{student.user.first_name} {student.user.last_name}",
+                'enrollment_number': student.enrollment_number,
+                'relationship': mapping.relationship,
+                'has_picture': False,
+            }
+            
+            # Check if profile picture exists
+            if student.profile_picture:
+                # Get the file path
+                if hasattr(student.profile_picture, 'name'):
+                    picture_path = student.profile_picture.name
+                else:
+                    picture_path = str(student.profile_picture)
+                
+                try:
+                    view_data = r2_storage.generate_view_url(
+                        file_path=picture_path,
+                        expires_in=3600  # 1 hour
+                    )
+                    child_data['has_picture'] = True
+                    child_data['url'] = view_data['url']
+                    child_data['expires_at'] = view_data['expires_at']
+                    child_data['expires_in'] = view_data['expires_in']
+                    child_data['file_path'] = picture_path
+                except Exception as e:
+                    # If URL generation fails, mark as no picture
+                    child_data['has_picture'] = False
+                    child_data['error'] = str(e)
+            
+            children_data.append(child_data)
         
         return Response({
             'count': len(children_data),

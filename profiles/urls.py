@@ -13,6 +13,9 @@ from .views import (
     StudentLocationAdminView,
     ParentChildLocationView,
     ParentChildrenLocationsView,
+    # Profile picture views
+    ParentChildProfilePictureView,
+    ParentChildrenPicturesView,
 )
 from .student_dashboard import StudentDashboardAPIView
 from .parent_dashboard import (
@@ -62,6 +65,17 @@ urlpatterns = [
     # Parent location routes
     path('parents/me/children/locations/', ParentChildrenLocationsView.as_view(), name='parent-children-locations'),
     path('parents/me/children/<uuid:child_id>/location/', ParentChildLocationView.as_view(), name='parent-child-location'),
+    
+    # ── PARENT CHILD PROFILE PICTURES ──────────────────────────────────────
+    # Get profile picture for a specific child
+    path('parents/me/children/<uuid:child_id>/picture/', 
+         ParentChildProfilePictureView.as_view(), 
+         name='parent-child-picture'),
+    
+    # Get profile pictures for ALL children in one call
+    path('parents/me/children/pictures/', 
+         ParentChildrenPicturesView.as_view(), 
+         name='parent-children-pictures'),
     
     # Parent Dashboard & Child Management
     path('parents/dashboard/', ParentDashboardAPIView.as_view(), name='parent-dashboard'),
