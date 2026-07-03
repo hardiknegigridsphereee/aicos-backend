@@ -1,29 +1,55 @@
-# .dockerignore
+# Version control
 .git
 .gitignore
+
+# Python
 *.pyc
 __pycache__/
 *.log
 *.sqlite3
 *.db
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
 .env.local
 .env.production
-node_modules/
+.env.*
 venv/
 env/
 .venv/
+
+# IDEs
 .vscode/
 .idea/
 *.iml
 .DS_Store
 Thumbs.db
-*.pem
-*.key
-*.crt
-.pytest_cache/
-.coverage
-htmlcov/
+
+# Build artifacts
 dist/
 build/
 *.egg-info/
 *.whl
+
+# Certificates & Keys
+*.pem
+*.key
+*.crt
+
+# Docker (ADD THESE)
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*.bak
