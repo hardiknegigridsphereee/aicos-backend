@@ -1,6 +1,6 @@
 # profiles/serializers.py
 from rest_framework import serializers
-from .models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping
+from .models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping, StudentDevice, StudentLocationHistory
 
 
 class StudentProfileSerializer(serializers.ModelSerializer):
@@ -176,3 +176,67 @@ class ParentStudentMappingSerializer(serializers.ModelSerializer):
         model = ParentStudentMapping
         fields = '__all__'
         read_only_fields = ('school', 'id')
+
+
+# ============================================================
+# LOCATION SERIALIZERS (NEW)
+# ============================================================
+
+class StudentDeviceSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='student.user.first_name', read_only=True)
+    student_email = serializers.EmailField(source='student.user.email', read_only=True)
+    enrollment_number = serializers.CharField(source='student.enrollment_number', read_only=True)
+    
+    class Meta:
+        model = StudentDevice
+        fields = [
+            'id', 'student', 'student_name', 'student_email', 'enrollment_number',
+            'imei_number', 'device_type', 'device_name', 'is_active',
+            'last_latitude', 'last_longitude', 'last_location_update',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'student', 'created_at', 'updated_at']
+
+
+class StudentLocationHistorySerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='student.user.first_name', read_only=True)
+    
+    class Meta:
+        model = StudentLocationHistory
+        fields = [
+            'id', 'student', 'student_name', 'device', 
+            'latitude', 'longitude', 'accuracy', 'altitude', 
+            'speed', 'heading', 'location_time', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
+class StudentLocationUpdateSerializer(serializers.Serializer):
+    latitude = serializers.DecimalField(max_digits=10, decimal_places=7)
+    longitude = serializers.DecimalField(max_digits=10, decimal_places=7)
+    location_time = serializers.DateTimeField(required=False)
+    accuracy = serializers.FloatField(required=False, allow_null=True)
+    altitude = serializers.FloatField(required=False, allow_null=True)
+    speed = serializers.FloatField(required=False, allow_null=True)
+    heading = serializers.FloatField(required=False, allow_null=True)
+
+
+class StudentDeviceCreateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StudentDevice
+        fields = ['student', 'imei_number', 'device_type', 'device_name', 'is_active']
+    
+    def validate_student(self, value):
+        request = self.context.get('request')
+        if value.school != request.user.school:
+            raise serializers.ValidationError("Student does not belong to your school.")
+        return value
+
+
+class ParentChildLocationSerializer(serializers.Serializer):
+    child_id = serializers.UUIDField()
+    name = serializers.CharField(read_only=True)
+    enrollment_number = serializers.CharField(read_only=True)
+    has_device = serializers.BooleanField(read_only=True)
+    last_location = serializers.DictField(read_only=True, required=False)
+    device_info = serializers.DictField(read_only=True, required=False)
