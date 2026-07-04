@@ -4,12 +4,18 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework.views import APIView
 from tenants.views import TenantAwareModelViewSet
-from accounts.permissions import IsStudent, IsTeacher, IsParent, IsParentOfStudent, IsStudentOrReadOnly
-from .models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping
+from accounts.permissions import IsStudent, IsTeacher, IsParent, IsParentOfStudent, IsStudentOrReadOnly, IsTeacherOrStaff
+from .models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping, StudentDevice, StudentLocationHistory
 from .serializers import (
     StudentProfileSerializer, TeacherProfileSerializer,
-    ParentProfileSerializer, ParentStudentMappingSerializer
+    ParentProfileSerializer, ParentStudentMappingSerializer,
+    # Location serializers
+    StudentDeviceSerializer,
+    StudentLocationHistorySerializer,
+    StudentLocationUpdateSerializer,
+    StudentDeviceCreateSerializer,
 )
 from academics.models import StudentEnrollment, Subject
 from academics.serializers import SubjectSerializer
@@ -483,3 +489,526 @@ class UserContextView(views.APIView):
         }
         
         return response.Response(payload)
+
+
+# ============================================================
+# LOCATION VIEWS (NEW)
+# ============================================================
+
+class StudentDeviceDetailView(views.APIView):
+    """
+    GET /api/v1/profiles/students/me/device/ - Get current student's device
+    POST /api/v1/profiles/students/me/device/ - Create or update device
+    """
+    permission_classes = [IsAuthenticated, IsStudent]
+    
+    def get(self, request):
+        try:
+            student = StudentProfile.objects.get(user=request.user, school=request.user.school)
+            device = StudentDevice.objects.get(student=student)
+            serializer = StudentDeviceSerializer(device)
+            return Response(serializer.data)
+        except StudentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Student profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except StudentDevice.DoesNotExist:
+            return Response(
+                {'detail': 'No device registered for this student.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    
+    def post(self, request):
+        try:
+            student = StudentProfile.objects.get(user=request.user, school=request.user.school)
+        except StudentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Student profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Check if device already exists
+        existing = StudentDevice.objects.filter(student=student).first()
+        if existing:
+            # Update existing device
+            serializer = StudentDeviceSerializer(existing, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create new device
+        serializer = StudentDeviceCreateSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        if serializer.is_valid():
+            device = serializer.save(school=request.user.school)
+            return Response(
+                StudentDeviceSerializer(device).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class StudentDeviceUpdateView(views.APIView):
+    """
+    PUT/PATCH /api/v1/profiles/students/me/device/update/
+    Update current student's device info
+    """
+    permission_classes = [IsAuthenticated, IsStudent]
+    
+    def patch(self, request):
+        try:
+            student = StudentProfile.objects.get(user=request.user, school=request.user.school)
+            device = StudentDevice.objects.get(student=student)
+        except (StudentProfile.DoesNotExist, StudentDevice.DoesNotExist):
+            return Response(
+                {'detail': 'Student or device not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = StudentDeviceSerializer(device, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class StudentUpdateLocationView(views.APIView):
+    """
+    POST /api/v1/profiles/students/me/location/update/
+    Update current student's location (from device)
+    """
+    permission_classes = [IsAuthenticated, IsStudent]
+    
+    def post(self, request):
+        try:
+            student = StudentProfile.objects.get(user=request.user, school=request.user.school)
+            device = StudentDevice.objects.get(student=student)
+        except (StudentProfile.DoesNotExist, StudentDevice.DoesNotExist):
+            return Response(
+                {'detail': 'Student or device not found. Please register your device first.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = StudentLocationUpdateSerializer(data=request.data)
+        if serializer.is_valid():
+            location_data = serializer.validated_data
+            
+            # Update device location
+            history = device.update_location(
+                latitude=location_data['latitude'],
+                longitude=location_data['longitude'],
+                location_time=location_data.get('location_time'),
+                accuracy=location_data.get('accuracy'),
+                altitude=location_data.get('altitude'),
+                speed=location_data.get('speed'),
+                heading=location_data.get('heading'),
+            )
+            
+            return Response({
+                'detail': 'Location updated successfully.',
+                'location': StudentLocationHistorySerializer(history).data,
+                'device': StudentDeviceSerializer(device).data,
+            })
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class StudentLocationHistoryView(views.APIView):
+    """
+    GET /api/v1/profiles/students/me/location/history/
+    Get location history for current student
+    """
+    permission_classes = [IsAuthenticated, IsStudent]
+    
+    def get(self, request):
+        try:
+            student = StudentProfile.objects.get(user=request.user, school=request.user.school)
+        except StudentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Student profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get query params
+        days = request.query_params.get('days', 7)
+        limit = request.query_params.get('limit', 50)
+        
+        try:
+            days = int(days)
+            limit = int(limit)
+        except ValueError:
+            days = 7
+            limit = 50
+        
+        history = student.get_location_history(days=days)[:limit]
+        serializer = StudentLocationHistorySerializer(history, many=True)
+        
+        return Response({
+            'count': history.count(),
+            'days': days,
+            'limit': limit,
+            'results': serializer.data
+        })
+
+
+class StudentLocationAdminView(views.APIView):
+    """
+    GET /api/v1/profiles/locations/students/{student_id}/
+    Get location for a specific student (Admin/Staff only)
+    """
+    permission_classes = [IsAuthenticated, IsTeacherOrStaff]
+    
+    def get(self, request, student_id):
+        try:
+            student = StudentProfile.objects.get(id=student_id, school=request.user.school)
+        except StudentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Student not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        try:
+            device = StudentDevice.objects.get(student=student)
+            device_serializer = StudentDeviceSerializer(device)
+            
+            # Get recent history
+            history = student.location_history.all().order_by('-location_time')[:10]
+            history_serializer = StudentLocationHistorySerializer(history, many=True)
+            
+            return Response({
+                'student': {
+                    'id': str(student.id),
+                    'name': f"{student.user.first_name} {student.user.last_name}",
+                    'enrollment_number': student.enrollment_number,
+                },
+                'device': device_serializer.data,
+                'recent_history': history_serializer.data,
+            })
+        except StudentDevice.DoesNotExist:
+            return Response({
+                'student': {
+                    'id': str(student.id),
+                    'name': f"{student.user.first_name} {student.user.last_name}",
+                    'enrollment_number': student.enrollment_number,
+                },
+                'device': None,
+                'recent_history': [],
+                'detail': 'No device registered for this student.'
+            })
+
+
+class ParentChildLocationView(views.APIView):
+    """
+    GET /api/v1/profiles/parents/me/children/{child_id}/location/
+    Get location for a specific child (Parent only)
+    """
+    permission_classes = [IsAuthenticated, IsParent]
+    
+    def get(self, request, child_id):
+        try:
+            parent = request.user.parentprofile
+        except ParentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Parent profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify parent-child relationship
+        try:
+            mapping = ParentStudentMapping.objects.get(
+                parent=parent,
+                student_id=child_id,
+                school=request.user.school,
+                can_view_academics=True
+            )
+        except ParentStudentMapping.DoesNotExist:
+            return Response(
+                {'detail': 'You are not authorized to view this child\'s location.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        student = mapping.student
+        
+        try:
+            device = StudentDevice.objects.get(student=student)
+            
+            # Get location history (last 24 hours)
+            from django.utils import timezone
+            from datetime import timedelta
+            cutoff = timezone.now() - timedelta(hours=24)
+            history = student.location_history.filter(
+                location_time__gte=cutoff
+            ).order_by('-location_time')[:20]
+            
+            return Response({
+                'child': {
+                    'id': str(student.id),
+                    'name': f"{student.user.first_name} {student.user.last_name}",
+                    'enrollment_number': student.enrollment_number,
+                    'relationship': mapping.relationship,
+                },
+                'current_location': {
+                    'latitude': float(device.last_latitude) if device.last_latitude else None,
+                    'longitude': float(device.last_longitude) if device.last_longitude else None,
+                    'timestamp': device.last_location_update,
+                    'accuracy': None,
+                } if device.last_latitude else None,
+                'device_info': {
+                    'device_name': device.device_name,
+                    'device_type': device.get_device_type_display(),
+                    'is_active': device.is_active,
+                    'last_updated': device.last_location_update,
+                },
+                'recent_history': StudentLocationHistorySerializer(history, many=True).data,
+            })
+        except StudentDevice.DoesNotExist:
+            return Response({
+                'child': {
+                    'id': str(student.id),
+                    'name': f"{student.user.first_name} {student.user.last_name}",
+                    'enrollment_number': student.enrollment_number,
+                },
+                'current_location': None,
+                'device_info': None,
+                'recent_history': [],
+                'detail': 'No device registered for this child.'
+            })
+
+
+class ParentChildrenLocationsView(views.APIView):
+    """
+    GET /api/v1/profiles/parents/me/children/locations/
+    Get locations for all children (Parent only)
+    """
+    permission_classes = [IsAuthenticated, IsParent]
+    
+    def get(self, request):
+        try:
+            parent = request.user.parentprofile
+        except ParentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Parent profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get all children
+        mappings = ParentStudentMapping.objects.filter(
+            parent=parent,
+            school=request.user.school,
+            can_view_academics=True
+        ).select_related('student__user')
+        
+        children_data = []
+        for mapping in mappings:
+            student = mapping.student
+            device = StudentDevice.objects.filter(student=student).first()
+            
+            child_info = {
+                'id': str(student.id),
+                'name': f"{student.user.first_name} {student.user.last_name}",
+                'enrollment_number': student.enrollment_number,
+                'relationship': mapping.relationship,
+                'has_device': bool(device),
+                'last_location': None,
+                'device_info': None,
+            }
+            
+            if device:
+                child_info['last_location'] = {
+                    'latitude': float(device.last_latitude) if device.last_latitude else None,
+                    'longitude': float(device.last_longitude) if device.last_longitude else None,
+                    'timestamp': device.last_location_update,
+                }
+                child_info['device_info'] = {
+                    'device_name': device.device_name,
+                    'device_type': device.get_device_type_display(),
+                    'is_active': device.is_active,
+                    'last_updated': device.last_location_update,
+                }
+            
+            children_data.append(child_info)
+        
+        return Response({
+            'count': len(children_data),
+            'children': children_data
+        })
+# profiles/views.py - Add this new view at the end of the file
+
+class ParentChildProfilePictureView(APIView):
+    """
+    GET /api/v1/profiles/parents/me/children/{child_id}/picture/
+    Returns a signed URL for the child's profile picture
+    
+    Response:
+    {
+        "has_picture": true/false,
+        "url": "signed_url",
+        "expires_at": "2026-07-04T...",
+        "expires_in": 3600,
+        "child_id": "uuid",
+        "child_name": "John Doe",
+        "enrollment_number": "STU123"
+    }
+    """
+    permission_classes = [IsAuthenticated, IsParent]
+    
+    def get(self, request, child_id):
+        try:
+            parent = ParentProfile.objects.get(user=request.user, school=request.user.school)
+        except ParentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Parent profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify parent-child relationship
+        try:
+            mapping = ParentStudentMapping.objects.get(
+                parent=parent,
+                student_id=child_id,
+                school=request.user.school,
+                can_view_academics=True
+            )
+        except ParentStudentMapping.DoesNotExist:
+            return Response(
+                {'detail': 'You are not authorized to view this child\'s data.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        student = mapping.student
+        
+        # Check if profile picture exists
+        if not student.profile_picture:
+            return Response({
+                'has_picture': False,
+                'detail': 'No profile picture set for this student.',
+                'child_id': str(student.id),
+                'child_name': f"{student.user.first_name} {student.user.last_name}",
+                'enrollment_number': student.enrollment_number
+            }, status=status.HTTP_200_OK)
+        
+        # Get the file path
+        if hasattr(student.profile_picture, 'name'):
+            picture_path = student.profile_picture.name
+        else:
+            picture_path = str(student.profile_picture)
+        
+        # Generate signed URL (valid for 1 hour)
+        from core.utils.r2_storage import r2_storage
+        try:
+            view_data = r2_storage.generate_view_url(
+                file_path=picture_path,
+                expires_in=3600  # 1 hour
+            )
+            
+            return Response({
+                'has_picture': True,
+                'url': view_data['url'],
+                'expires_at': view_data['expires_at'],
+                'expires_in': view_data['expires_in'],
+                'file_path': picture_path,
+                'child_id': str(student.id),
+                'child_name': f"{student.user.first_name} {student.user.last_name}",
+                'enrollment_number': student.enrollment_number,
+                'relationship': mapping.relationship
+            })
+        except Exception as e:
+            return Response({
+                'has_picture': False,
+                'detail': f'Failed to generate view URL: {str(e)}',
+                'child_id': str(student.id),
+                'child_name': f"{student.user.first_name} {student.user.last_name}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ParentChildrenPicturesView(APIView):
+    """
+    GET /api/v1/profiles/parents/me/children/pictures/
+    Returns signed URLs for ALL children's profile pictures
+    
+    Response:
+    {
+        "children": [
+            {
+                "child_id": "uuid",
+                "child_name": "John Doe",
+                "enrollment_number": "STU123",
+                "relationship": "Mother",
+                "has_picture": true,
+                "url": "signed_url",
+                "expires_at": "2026-07-04T...",
+                "expires_in": 3600
+            },
+            {
+                "child_id": "uuid",
+                "child_name": "Jane Smith",
+                "enrollment_number": "STU456",
+                "relationship": "Father",
+                "has_picture": false
+            }
+        ]
+    }
+    """
+    permission_classes = [IsAuthenticated, IsParent]
+    
+    def get(self, request):
+        try:
+            parent = ParentProfile.objects.get(user=request.user, school=request.user.school)
+        except ParentProfile.DoesNotExist:
+            return Response(
+                {'detail': 'Parent profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get all children
+        mappings = ParentStudentMapping.objects.filter(
+            parent=parent,
+            school=request.user.school,
+            can_view_academics=True
+        ).select_related('student__user')
+        
+        children_data = []
+        from core.utils.r2_storage import r2_storage
+        
+        for mapping in mappings:
+            student = mapping.student
+            child_data = {
+                'child_id': str(student.id),
+                'child_name': f"{student.user.first_name} {student.user.last_name}",
+                'enrollment_number': student.enrollment_number,
+                'relationship': mapping.relationship,
+                'has_picture': False,
+            }
+            
+            # Check if profile picture exists
+            if student.profile_picture:
+                # Get the file path
+                if hasattr(student.profile_picture, 'name'):
+                    picture_path = student.profile_picture.name
+                else:
+                    picture_path = str(student.profile_picture)
+                
+                try:
+                    view_data = r2_storage.generate_view_url(
+                        file_path=picture_path,
+                        expires_in=3600  # 1 hour
+                    )
+                    child_data['has_picture'] = True
+                    child_data['url'] = view_data['url']
+                    child_data['expires_at'] = view_data['expires_at']
+                    child_data['expires_in'] = view_data['expires_in']
+                    child_data['file_path'] = picture_path
+                except Exception as e:
+                    # If URL generation fails, mark as no picture
+                    child_data['has_picture'] = False
+                    child_data['error'] = str(e)
+            
+            children_data.append(child_data)
+        
+        return Response({
+            'count': len(children_data),
+            'children': children_data
+        })
