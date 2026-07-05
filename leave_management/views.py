@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
@@ -8,9 +9,16 @@ from rest_framework.response import Response
 from profiles.models import StudentProfile, TeacherProfile, ParentProfile, ParentStudentMapping
 from tenants.views import TenantAwareModelViewSet
 
+from notifications.models import Notification
+
 from .models import LeaveRequest
 from .permissions import IsStudentOrTeacher, is_school_admin
 from .utils import get_homeroom_student_ids, is_section_teacher_of_student
+from .notification_utils import (
+    build_leave_payload,
+    get_leave_applicant_user,
+    get_leave_reviewers,
+)
 from .serializers import (
     LeaveRequestCreateSerializer,
     LeaveRequestSerializer,
@@ -34,6 +42,11 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
                    -> POST /leave-requests/{id}/reject/
       Parents   -> GET  /leave-requests/?student_id=<id>  (their mapped child's leave history, read-only)
       Any applicant -> POST /leave-requests/{id}/cancel/  (withdraw own pending request)
+
+    Every state change (submit, approve, reject) also creates the matching
+    Notification row(s) inside the *same* transaction.atomic() block as the
+    LeaveRequest write -- the client only ever calls this one endpoint per
+    action; it never has to POST to a separate notifications endpoint.
     """
 
     queryset = LeaveRequest.objects.select_related(
@@ -120,9 +133,25 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
         return qs
 
     # ------------------------------------------------------------------
-    # Create: figure out who is applying and stamp student/teacher/school
+    # Create: figure out who is applying, save the leave request, AND
+    # fan out a Notification to every reviewer -- all inside one atomic
+    # transaction. If anything fails, nothing is written.
     # ------------------------------------------------------------------
-    def perform_create(self, serializer):
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            leave = self._save_leave_request(serializer)
+            self._notify_reviewers(leave)
+
+        # Re-serialize with the full (read) serializer so the client gets
+        # back applicant_name / total_days / etc., not just the write shape.
+        output = LeaveRequestSerializer(leave, context=self.get_serializer_context())
+        headers = self.get_success_headers(output.data)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def _save_leave_request(self, serializer):
         user = self.request.user
         if not user.school:
             raise PermissionDenied("You must be assigned to a school to apply for leave.")
@@ -131,14 +160,14 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
         teacher_profile = TeacherProfile.objects.filter(user=user, school=user.school).first()
 
         if student_profile:
-            serializer.save(
+            return serializer.save(
                 school=user.school,
                 applicant_role=LeaveRequest.ApplicantRole.STUDENT,
                 student=student_profile,
                 teacher=None,
             )
         elif teacher_profile:
-            serializer.save(
+            return serializer.save(
                 school=user.school,
                 applicant_role=LeaveRequest.ApplicantRole.TEACHER,
                 teacher=teacher_profile,
@@ -146,6 +175,27 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
             )
         else:
             raise PermissionDenied("Only students or teachers can apply for leave.")
+
+    def _notify_reviewers(self, leave):
+        """
+        Teacher applies -> every school-admin user gets a notification.
+        Student applies -> their homeroom/section teacher(s) get one.
+        One Notification row per reviewer (receiver is a single FK).
+        """
+        reviewers = get_leave_reviewers(leave)
+        payload = build_leave_payload(leave)
+
+        Notification.objects.bulk_create([
+            Notification(
+                school=leave.school,
+                notification_type=Notification.NotificationType.LEAVE,
+                sender=self.request.user,
+                receiver=reviewer,
+                payload=payload,
+                is_read=False,
+            )
+            for reviewer in reviewers
+        ])
 
     # ------------------------------------------------------------------
     # GET /leave-requests/me/
@@ -230,12 +280,27 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
 
         serializer = LeaveReviewSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        remarks = serializer.validated_data.get('remarks', '')
 
-        leave.status = new_status
-        leave.reviewed_by = user
-        leave.reviewed_at = timezone.now()
-        leave.review_remarks = serializer.validated_data.get('remarks', '')
-        leave.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'review_remarks'])
+        with transaction.atomic():
+            leave.status = new_status
+            leave.reviewed_by = user
+            leave.reviewed_at = timezone.now()
+            leave.review_remarks = remarks
+            leave.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'review_remarks'])
+
+            # Send the decision back to whoever originally applied. This is
+            # deliberately *not* pushed in real time -- the applicant's
+            # client picks it up next time it polls / mounts the
+            # notification panel (see notifications app).
+            Notification.objects.create(
+                school=leave.school,
+                notification_type=Notification.NotificationType.LEAVE,
+                sender=user,
+                receiver=get_leave_applicant_user(leave),
+                payload={**build_leave_payload(leave), 'remarks': remarks},
+                is_read=False,
+            )
 
         return Response(LeaveRequestSerializer(leave).data)
 
@@ -259,6 +324,18 @@ class LeaveRequestViewSet(TenantAwareModelViewSet):
 
         leave.status = LeaveRequest.StatusChoices.CANCELLED
         leave.save(update_fields=['status'])
+
+        # The only notifications that can exist for a still-PENDING leave are
+        # the "applied for leave" ones sent to its reviewers in
+        # _notify_reviewers() -- no approve/reject notification exists yet,
+        # since those only fire once a decision is made. Once cancelled,
+        # there's nothing left for a reviewer to act on, so remove them
+        # rather than leaving a stale "Pending" notification behind.
+        Notification.objects.filter(
+            notification_type=Notification.NotificationType.LEAVE,
+            payload__leave_id=str(leave.id),
+        ).delete()
+
         return Response(LeaveRequestSerializer(leave).data)
 
 

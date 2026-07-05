@@ -1,4 +1,3 @@
-# school_admin/views/grievance_views.py
 from django.utils import timezone
 from django.db.models import Q
 
@@ -24,6 +23,12 @@ from school_admin.serializers.grievance_serializers import (
 from accounts.permissions import IsTeacherOrStaff
 from profiles.models import ParentStudentMapping
 
+from notifications.models import Notification
+from school_admin.notification_utils import (
+    build_grievance_payload,
+    get_grievance_admins,
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -34,6 +39,12 @@ def _is_school_admin(user) -> bool:
     Returns True for Django superusers, Django staff, AND any school user
     who is NOT a student or parent (i.e. teachers / admin staff registered
     in the tenant without a student/parent profile).
+
+    NOTE: this stays broad on purpose -- it backs `IsTeacherOrStaff`-style
+    permission checks (who is *allowed* to manage a grievance). It is
+    intentionally NOT used to decide who gets *notified* about grievances;
+    see `get_grievance_admins()` in notification_utils.py for that
+    narrower, admin-only rule.
     """
     if user.is_superuser or user.is_staff:
         return True
@@ -175,6 +186,68 @@ class GrievanceViewSet(TenantAwareModelViewSet):
             school       = self.request.user.school,
             submitted_by = self.request.user,
         )
+        self._notify_admins(serializer.instance)
+
+    def _notify_admins(self, grievance):
+        """
+        One Notification row per grievance-admin, fired on submission.
+
+        `get_grievance_admins()` now excludes teachers (see
+        notification_utils.py) -- grievances are a school-admin-only inbox,
+        so teachers must not get a bell notification for one just because
+        they happen to have permission to manage grievances.
+        """
+        payload = build_grievance_payload(grievance)
+        admins = get_grievance_admins(grievance.school)
+
+        Notification.objects.bulk_create([
+            Notification(
+                school=grievance.school,
+                notification_type=Notification.NotificationType.GRIEVANCE,
+                sender=grievance.submitted_by,
+                receiver=admin,
+                payload=payload,
+                is_read=False,
+            )
+            for admin in admins
+        ])
+
+    def _notify_submitter(self, grievance):
+        """
+        Single Notification back to whoever submitted the grievance, fired
+        on resolve/reject/close so they're not left wondering what
+        happened to it.
+        """
+        Notification.objects.create(
+            school=grievance.school,
+            notification_type=Notification.NotificationType.GRIEVANCE,
+            sender=self.request.user,
+            receiver=grievance.submitted_by,
+            payload=build_grievance_payload(grievance),
+            is_read=False,
+        )
+
+    def _clear_grievance_notifications(self, grievance, exclude_receiver=None):
+        """
+        Delete every outstanding Notification tied to this grievance.
+
+        Notification.payload only stores grievance_id as a plain JSON
+        string (no FK to Grievance), so nothing cascades automatically --
+        without this, a resolved/rejected/withdrawn/deleted grievance keeps
+        showing its stale "new grievance" / "update" entries in every
+        recipient's bell forever.
+
+        `exclude_receiver`, if given, leaves that user's existing
+        notifications alone (used when we're about to send them a fresh,
+        more relevant one instead of just wiping the slate).
+        """
+        qs = Notification.objects.filter(
+            notification_type=Notification.NotificationType.GRIEVANCE,
+            payload__grievance_id=str(grievance.id),
+        )
+        if exclude_receiver is not None:
+            qs = qs.exclude(receiver=exclude_receiver)
+        qs.delete()
 
     # ------------------------------------------------------------------
     # Update  (admins only – enforced by get_permissions)
@@ -182,6 +255,15 @@ class GrievanceViewSet(TenantAwareModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save()
+
+    # ------------------------------------------------------------------
+    # Destroy – same "stale notification" problem as circulars: wipe any
+    # Notification rows pointing at this grievance before it's gone.
+    # ------------------------------------------------------------------
+
+    def perform_destroy(self, instance):
+        self._clear_grievance_notifications(instance)
+        instance.delete()
 
     # ------------------------------------------------------------------
     # Custom actions – student / parent facing
@@ -254,13 +336,20 @@ class GrievanceViewSet(TenantAwareModelViewSet):
         grievance.assigned_to  = request.user
         grievance.save(update_fields=['status', 'admin_remarks', 'resolved_at', 'assigned_to'])
 
+        # Clear the old "new grievance" notifications (e.g. sitting in
+        # other admins' bells) -- they're stale now that this is resolved --
+        # then send the submitter a fresh "resolved" notification.
+        self._clear_grievance_notifications(grievance)
+        self._notify_submitter(grievance)
+
         return Response(GrievanceSerializer(grievance).data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['post'], url_path='close')
     def close_grievance(self, request, pk=None):
         """
         POST /api/v1/school-admin/grievances/{id}/close/
-        Admin or the original submitter may close a grievance.
+        Admin or the original submitter may close a grievance. Submitters
+        use this endpoint to "withdraw" their own grievance.
         """
         grievance = self.get_object()
         user      = request.user
@@ -273,6 +362,14 @@ class GrievanceViewSet(TenantAwareModelViewSet):
 
         grievance.status = Grievance.StatusChoices.CLOSED
         grievance.save(update_fields=['status'])
+
+        # Whether an admin closed it or the submitter withdrew it, any
+        # outstanding notifications about this grievance are now stale and
+        # must not keep sitting in anyone's bell.
+        self._clear_grievance_notifications(grievance)
+
+        if _is_school_admin(user) and grievance.submitted_by != user:
+            self._notify_submitter(grievance)
 
         return Response(GrievanceSerializer(grievance).data, status=status.HTTP_200_OK)
 
@@ -289,6 +386,9 @@ class GrievanceViewSet(TenantAwareModelViewSet):
         grievance.admin_remarks = request.data.get('admin_remarks', 'Grievance rejected.')
         grievance.assigned_to   = request.user
         grievance.save(update_fields=['status', 'admin_remarks', 'assigned_to'])
+
+        self._clear_grievance_notifications(grievance)
+        self._notify_submitter(grievance)
 
         return Response(GrievanceSerializer(grievance).data, status=status.HTTP_200_OK)
 

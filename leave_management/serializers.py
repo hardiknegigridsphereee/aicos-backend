@@ -30,9 +30,12 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
 
 class LeaveRequestCreateSerializer(serializers.ModelSerializer):
     """
-    Used for POST /leaves/. The view determines `applicant_role` and
-    `student`/`teacher` from the requesting user's profile -- the client
-    only ever supplies the leave details.
+    Used for POST /leave-requests/. This is the exact payload shape you
+    specified:
+        { "leave_type": "Sick", "start_date": "...", "end_date": "...",
+          "reason": "...", "attachment": "..." }
+    The view determines `applicant_role` and `student`/`teacher` from the
+    requesting user's profile -- the client never sends those.
     """
 
     class Meta:
