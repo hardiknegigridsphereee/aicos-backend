@@ -51,7 +51,8 @@ LOCAL_APPS = [
     'tutor',  # Dashboard, Notifications, Activity Logs
     # 'finance',      # Invoices, Payments
     'leave_management',
-    'timetable'
+    'timetable',
+    'notifications',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS

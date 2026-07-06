@@ -45,6 +45,9 @@ urlpatterns = [
     
     # Timetable Management (NEW)
     path('api/v1/timetable/', include('timetable.urls')),
+
+    #notifications
+    path('api/v1/notifications/', include('notifications.urls'))
 ]
 
 # Serve media files in development (for local storage fallback)

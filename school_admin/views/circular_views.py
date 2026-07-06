@@ -1,5 +1,3 @@
-# school_admin/views/circular_views.py
-
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,6 +6,12 @@ from django_filters.rest_framework import DjangoFilterBackend
 
 from school_admin.models import Circular
 from school_admin.serializers.circular_serializers import CircularSerializer, CircularListSerializer
+
+from notifications.models import Notification
+from school_admin.notification_utils import (
+    build_circular_payload,
+    get_circular_recipient_users,
+)
 
 # Re-use the same permission class defined in school_admin_views.py
 from school_admin.views.school_admin_views import IsSchoolAdminOrStaff
@@ -144,6 +148,31 @@ class CircularViewSet(viewsets.ModelViewSet):
             school=self.request.user.school,
             created_by=self.request.user,
         )
+        circular = serializer.instance
+        if circular.is_published:
+            self._notify_recipients(circular)
+
+    def _notify_recipients(self, circular):
+        """
+        One Notification row per teacher/student in the circular's audience.
+        Called whenever a circular becomes visible to recipients -- either
+        published straight away at creation, or flipped from unpublished to
+        published via toggle_publish().
+        """
+        payload = build_circular_payload(circular)
+        recipients = get_circular_recipient_users(circular)
+
+        Notification.objects.bulk_create([
+            Notification(
+                school=circular.school,
+                notification_type=Notification.NotificationType.CIRCULAR,
+                sender=self.request.user,
+                receiver=recipient,
+                payload=payload,
+                is_read=False,
+            )
+            for recipient in recipients
+        ])
 
     # ------------------------------------------------------------------
     # Update – keep school consistent (prevent cross-tenant writes)
@@ -151,6 +180,22 @@ class CircularViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save(school=self.request.user.school)
+
+    # ------------------------------------------------------------------
+    # Destroy – a deleted circular must not keep haunting people's
+    # notification bells. Notification.payload only stores circular_id as
+    # a plain JSON string (no FK to Circular), so deleting the Circular row
+    # does NOT cascade -- we have to clean those Notification rows up
+    # ourselves, otherwise every recipient keeps an orphaned/undead entry
+    # in their dropdown forever.
+    # ------------------------------------------------------------------
+
+    def perform_destroy(self, instance):
+        Notification.objects.filter(
+            notification_type=Notification.NotificationType.CIRCULAR,
+            payload__circular_id=str(instance.id),
+        ).delete()
+        instance.delete()
 
     # ------------------------------------------------------------------
     # Extra action: toggle publish / unpublish without a full PUT body
@@ -163,7 +208,21 @@ class CircularViewSet(viewsets.ModelViewSet):
         Flips is_published.  Admin / staff only (enforced by get_permissions).
         """
         circular = self.get_object()
+        was_published = circular.is_published
         circular.is_published = not circular.is_published
         circular.save(update_fields=['is_published'])
+
+        if circular.is_published and not was_published:
+            self._notify_recipients(circular)
+
+        # Unpublishing a circular hides it from recipients again -- any
+        # existing notifications pointing at it are now stale, same as a
+        # hard delete, so clear them out too.
+        if not circular.is_published and was_published:
+            Notification.objects.filter(
+                notification_type=Notification.NotificationType.CIRCULAR,
+                payload__circular_id=str(circular.id),
+            ).delete()
+
         serializer = CircularSerializer(circular, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
