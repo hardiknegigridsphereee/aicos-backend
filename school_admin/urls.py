@@ -2,6 +2,13 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
+from school_admin.views.bulk_upload_views import (
+    BulkOnboardStudentAPIView,
+    BulkOnboardTeacherAPIView,
+    BulkOnboardParentAPIView,
+    BulkLinkParentStudentAPIView,
+)
+
 from .views.dashboard_views import (
     DashboardStatsAPIView,
     EnrollmentTrendAPIView,
@@ -52,6 +59,12 @@ urlpatterns = [
     path('staff/students/register/', OnboardStudentAPIView.as_view(), name='admin-register-student'),
     path('staff/teachers/register/', OnboardTeacherAPIView.as_view(), name='admin-register-teacher'),
     path('staff/parents/register/', OnboardParentAPIView.as_view(), name='admin-register-parent'),
+
+    # ── Bulk Onboarding (CSV/XLSX upload) ─────────────────────────────────
+    path('staff/students/bulk-register/', BulkOnboardStudentAPIView.as_view(), name='admin-bulk-register-student'),
+    path('staff/teachers/bulk-register/', BulkOnboardTeacherAPIView.as_view(), name='admin-bulk-register-teacher'),
+    path('staff/parents/bulk-register/', BulkOnboardParentAPIView.as_view(), name='admin-bulk-register-parent'),
+    path('parent-student-mappings/bulk-link/', BulkLinkParentStudentAPIView.as_view(), name='admin-bulk-link-parent-student'),
 
     # ── Settings ───────────────────────────────────────────────────────────
     path('settings/', SchoolSettingsAPIView.as_view(), name='school-settings'),

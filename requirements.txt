@@ -45,3 +45,4 @@ uritemplate==4.2.0
 urllib3==2.7.0
 boto3>=1.34.0
 django-storages>=1.14.0
+openpyxl

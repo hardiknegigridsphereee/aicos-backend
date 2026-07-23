@@ -1,12 +1,15 @@
-# school_admin/serializers/staff_management_serializers.py
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from profiles.models import TeacherProfile, StudentProfile,ParentProfile
+from profiles.models import TeacherProfile, StudentProfile, ParentProfile
+
+from school_admin.utils.email import send_registration_email
 
 User = get_user_model()
 
-# Rename your existing class to match the import expectation
+TEMPORARY_PASSWORD = "TemporaryPassword123!"
+
+
 class TeacherOnboardingSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True)
     last_name = serializers.CharField(write_only=True)
@@ -23,10 +26,17 @@ class TeacherOnboardingSerializer(serializers.ModelSerializer):
         school = self.context['request'].user.school
 
         with transaction.atomic():
-            user = User.objects.create_user(email=email, password="TemporaryPassword123!", first_name=first_name, last_name=last_name, school=school)
-            return TeacherProfile.objects.create(user=user, school=school, **validated_data)
+            user = User.objects.create_user(
+                email=email, password=TEMPORARY_PASSWORD,
+                first_name=first_name, last_name=last_name, school=school
+            )
+            profile = TeacherProfile.objects.create(user=user, school=school, **validated_data)
+            transaction.on_commit(
+                lambda: send_registration_email(user, 'teacher', TEMPORARY_PASSWORD)
+            )
+            return profile
 
-# Add this class so the import error is resolved
+
 class StudentOnboardingSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True)
     last_name = serializers.CharField(write_only=True)
@@ -43,11 +53,16 @@ class StudentOnboardingSerializer(serializers.ModelSerializer):
         school = self.context['request'].user.school
 
         with transaction.atomic():
-            user = User.objects.create_user(email=email, password="TemporaryPassword123!", first_name=first_name, last_name=last_name, school=school)
-            return StudentProfile.objects.create(user=user, school=school, **validated_data)
-        
+            user = User.objects.create_user(
+                email=email, password=TEMPORARY_PASSWORD,
+                first_name=first_name, last_name=last_name, school=school
+            )
+            profile = StudentProfile.objects.create(user=user, school=school, **validated_data)
+            transaction.on_commit(
+                lambda: send_registration_email(user, 'student', TEMPORARY_PASSWORD)
+            )
+            return profile
 
-    # school_admin/serializers/staff_management_serializers.py
 
 class ParentOnboardingSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True)
@@ -66,10 +81,14 @@ class ParentOnboardingSerializer(serializers.ModelSerializer):
 
         with transaction.atomic():
             user = User.objects.create_user(
-                email=email, 
-                password="TemporaryPassword123!", 
-                first_name=first_name, 
-                last_name=last_name, 
+                email=email,
+                password=TEMPORARY_PASSWORD,
+                first_name=first_name,
+                last_name=last_name,
                 school=school
             )
-            return ParentProfile.objects.create(user=user, school=school, **validated_data)
+            profile = ParentProfile.objects.create(user=user, school=school, **validated_data)
+            transaction.on_commit(
+                lambda: send_registration_email(user, 'parent', TEMPORARY_PASSWORD)
+            )
+            return profile
