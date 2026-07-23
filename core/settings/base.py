@@ -49,7 +49,7 @@ LOCAL_APPS = [
     'operations',
     'school_admin',
     'tutor',  # Dashboard, Notifications, Activity Logs
-    # 'finance',      # Invoices, Payments
+    'finance',  # Finance Management
     'leave_management',
     'timetable',
     'notifications',
