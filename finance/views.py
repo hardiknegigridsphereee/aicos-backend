@@ -1,4 +1,7 @@
 # finance/views.py
+import uuid
+from decimal import Decimal, InvalidOperation
+
 from rest_framework import viewsets, status, filters
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
@@ -6,6 +9,9 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
+
+from django.db import transaction as db_transaction
+from django.utils import timezone
 
 from tenants.views import TenantAwareModelViewSet
 from accounts.permissions import IsTeacherOrStaff, IsStudent, IsParent
@@ -60,11 +66,11 @@ class StudentFeeViewSet(TenantAwareModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         user = self.request.user
-        
+
         if hasattr(user, 'studentprofile'):
             student = user.studentprofile
             return qs.filter(student=student)
-        
+
         if hasattr(user, 'parentprofile'):
             parent = user.parentprofile
             student_ids = ParentStudentMapping.objects.filter(
@@ -72,7 +78,7 @@ class StudentFeeViewSet(TenantAwareModelViewSet):
                 school=user.school
             ).values_list('student_id', flat=True)
             return qs.filter(student_id__in=student_ids)
-        
+
         return qs
 
     @action(detail=False, methods=['get'], url_path='me')
@@ -84,13 +90,13 @@ class StudentFeeViewSet(TenantAwareModelViewSet):
                 {"detail": "Student profile not found."},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
         fees = StudentFee.objects.filter(
             student=student,
             school=request.user.school,
             is_active=True
         ).select_related('fee_structure__class_level', 'fee_structure__academic_year')
-        
+
         serializer = StudentFeeDetailSerializer(fees, many=True)
         return Response({
             "count": fees.count(),
@@ -106,16 +112,16 @@ class StudentFeeViewSet(TenantAwareModelViewSet):
                 {"detail": "Student profile not found."},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
+
         fees = StudentFee.objects.filter(
             student=student,
             school=request.user.school
         )
-        
+
         total_fee = sum(f.total_fee for f in fees)
         total_paid = sum(f.amount_paid for f in fees)
         balance = total_fee - total_paid
-        
+
         return Response({
             "student_name": f"{student.user.first_name} {student.user.last_name}",
             "enrollment_number": student.enrollment_number,
@@ -139,32 +145,32 @@ class StudentFeeViewSet(TenantAwareModelViewSet):
                 {'error': 'No file provided'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         file = request.FILES['file']
-        
+
         if not file.name.endswith(('.xlsx', '.xls')):
             return Response(
                 {'error': 'File must be an Excel file (.xlsx or .xls)'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             service = FeeBulkUploadService(
                 school=request.user.school,
                 user=request.user
             )
-            
+
             options = {
                 'update_existing': request.data.get('update_existing', 'true').lower() == 'true',
                 'batch_size': int(request.data.get('batch_size', 50)),
             }
-            
+
             results = service.process(
                 file_buffer=file.read(),
                 file_name=file.name,
                 options=options
             )
-            
+
             return Response({
                 'summary': {
                     'total': results['total'],
@@ -176,12 +182,71 @@ class StudentFeeViewSet(TenantAwareModelViewSet):
                 },
                 'errors': results['errors'][:20]
             }, status=status.HTTP_201_CREATED)
-            
+
         except Exception as e:
             return Response(
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+    @action(detail=True, methods=['post'], url_path='add-payment')
+    def add_payment(self, request, pk=None):
+        """
+        POST /api/v1/finance/student-fees/{id}/add-payment/
+        Records a payment transaction for this individual student's fee
+        and updates amount_paid / balance_due / status accordingly.
+
+        Expected payload:
+        {
+            "amount": "1500.00",
+            "payment_method": "Cash" | "Cheque" | "Bank_Transfer" | "Online" | "Card" | "Other",
+            "payment_date": "2026-07-24",   # optional, defaults to today
+            "reference_number": "...",       # optional
+            "notes": "..."                   # optional
+        }
+        """
+        student_fee = self.get_object()
+
+        try:
+            amount = Decimal(str(request.data.get('amount')))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({'error': 'A valid amount is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if amount <= 0:
+            return Response({'error': 'Amount must be greater than zero.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        remaining = student_fee.total_fee - student_fee.amount_paid
+        if amount > remaining:
+            return Response(
+                {'error': f'Amount exceeds balance due (₹{remaining}).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        payment_method = request.data.get('payment_method')
+        if payment_method not in FeeTransaction.PaymentMethod.values:
+            return Response({'error': 'Invalid payment method.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        payment_date = request.data.get('payment_date') or timezone.now().date()
+
+        with db_transaction.atomic():
+            FeeTransaction.objects.create(
+                school=student_fee.school,
+                student_fee=student_fee,
+                student=student_fee.student,
+                amount=amount,
+                payment_method=payment_method,
+                transaction_id=f"FEE-{uuid.uuid4().hex[:12].upper()}",
+                reference_number=request.data.get('reference_number', ''),
+                notes=request.data.get('notes', ''),
+                status=FeeTransaction.TransactionStatus.COMPLETED,
+                payment_date=payment_date,
+                created_by=request.user,
+            )
+            student_fee.amount_paid = student_fee.amount_paid + amount
+            student_fee.save()  # recomputes balance_due + status
+
+        serializer = StudentFeeDetailSerializer(student_fee)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class FeeTransactionViewSet(TenantAwareModelViewSet):
